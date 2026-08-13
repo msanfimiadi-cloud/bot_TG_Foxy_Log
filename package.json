@@ -10,10 +10,15 @@
   "scripts": {
     "start": "node src/index.js",
     "test": "node --test",
-    "check": "node --check src/index.js && node --check src/bot.js && node --check src/sheets.js"
+    "check": "node --check src/index.js && node --check src/bot.js && node --check src/sheets.js && node --check src/calculator.js && node --check src/quote.js && node --check src/drive.js",
+    "template:build": "node scripts/create-template.js"
+  },
+  "overrides": {
+    "uuid": "11.1.1"
   },
   "dependencies": {
     "dotenv": "17.4.2",
+    "exceljs": "^4.4.0",
     "googleapis": "174.0.1",
     "grammy": "1.45.1"
   }

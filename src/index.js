@@ -1,13 +1,15 @@
 import { createBot } from "./bot.js";
 import { loadConfig } from "./config.js";
 import { GoogleSheetsLeadStore } from "./sheets.js";
+import { QuoteDriveStore } from "./drive.js";
 
 async function main() {
   const config = loadConfig();
   const store = new GoogleSheetsLeadStore(config);
   await store.init();
+  const drive = new QuoteDriveStore(config, store.auth);
 
-  const bot = createBot(config, store);
+  const bot = createBot(config, store, drive);
   await bot.api.setMyCommands([
     { command: "start", description: "Открыть главное меню" },
     { command: "menu", description: "Показать меню" },

@@ -11,6 +11,7 @@ export class GoogleSheetsLeadStore {
   constructor(config) {
     this.config = config;
     this.sheets = null;
+    this.auth = null;
   }
 
   async init() {
@@ -27,8 +28,12 @@ export class GoogleSheetsLeadStore {
 
     const auth = new google.auth.GoogleAuth({
       credentials,
-      scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+      scopes: [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+      ],
     });
+    this.auth = auth;
     this.sheets = google.sheets({ version: "v4", auth });
     await this.assertHeaders();
   }
@@ -36,19 +41,28 @@ export class GoogleSheetsLeadStore {
   async assertHeaders() {
     const response = await this.sheets.spreadsheets.values.get({
       spreadsheetId: this.config.spreadsheetId,
-      range: `${quoteSheetName(this.config.sheetName)}!A1:O1`,
+      range: `${quoteSheetName(this.config.sheetName)}!A1:U1`,
     });
     const actual = response.data.values?.[0] ?? [];
-    const mismatch = HEADERS.some((header, index) => actual[index] !== header);
-    if (mismatch) {
+    const legacyMatches = HEADERS.slice(0, 15).every((header, index) => actual[index] === header);
+    if (!legacyMatches) {
       throw new Error(`Заголовки листа «${this.config.sheetName}» не совпадают с шаблоном`);
+    }
+    const quoteHeadersMissing = HEADERS.slice(15).some((header, offset) => actual[offset + 15] !== header);
+    if (quoteHeadersMissing) {
+      await this.sheets.spreadsheets.values.update({
+        spreadsheetId: this.config.spreadsheetId,
+        range: `${quoteSheetName(this.config.sheetName)}!P1:U1`,
+        valueInputOption: "RAW",
+        requestBody: { values: [HEADERS.slice(15)] },
+      });
     }
   }
 
   async all() {
     const response = await this.sheets.spreadsheets.values.get({
       spreadsheetId: this.config.spreadsheetId,
-      range: `${quoteSheetName(this.config.sheetName)}!A2:O`,
+      range: `${quoteSheetName(this.config.sheetName)}!A2:U`,
     });
     return (response.data.values ?? [])
       .map((row, index) => ({ lead: rowToLead(row), rowNumber: index + 2, raw: row }))
@@ -60,7 +74,7 @@ export class GoogleSheetsLeadStore {
     const normalized = normalizeLead(lead);
     await this.sheets.spreadsheets.values.append({
       spreadsheetId: this.config.spreadsheetId,
-      range: `${quoteSheetName(this.config.sheetName)}!A:O`,
+      range: `${quoteSheetName(this.config.sheetName)}!A:U`,
       valueInputOption: "USER_ENTERED",
       insertDataOption: "INSERT_ROWS",
       requestBody: { values: [leadToRow(normalized)] },
@@ -79,7 +93,7 @@ export class GoogleSheetsLeadStore {
     const updated = normalizeLead({ ...found.lead, ...patch });
     await this.sheets.spreadsheets.values.update({
       spreadsheetId: this.config.spreadsheetId,
-      range: `${quoteSheetName(this.config.sheetName)}!A${found.rowNumber}:O${found.rowNumber}`,
+      range: `${quoteSheetName(this.config.sheetName)}!A${found.rowNumber}:U${found.rowNumber}`,
       valueInputOption: "USER_ENTERED",
       requestBody: { values: [leadToRow(updated)] },
     });

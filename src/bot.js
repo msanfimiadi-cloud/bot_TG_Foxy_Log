@@ -1,9 +1,11 @@
-import { Bot, InlineKeyboard } from "grammy";
+import { Bot, InlineKeyboard, InputFile } from "grammy";
 import { EDITABLE_FIELDS, STATUSES } from "./constants.js";
 import {
   canSeeLead, escapeHtml, generateLeadId, managerName, missingFields, telegramUsername,
 } from "./leads.js";
 import { formatDate } from "./time.js";
+import { calculateQuote, KGT_RATES } from "./calculator.js";
+import { buildQuoteWorkbook, quoteFilename } from "./quote.js";
 
 const NEW_FIELDS = [
   ["Дата обращения", "Укажите дату обращения в формате ДД.ММ.ГГГГ", true],
@@ -53,6 +55,7 @@ function cardKeyboard(id) {
   return new InlineKeyboard()
     .text("✏️ Редактировать", `lead:edit:${id}`).row()
     .text("📌 Изменить статус", `lead:status:${id}`).row()
+    .text("📄 Создать КП", `lead:quote:${id}`).row()
     .text("⬅️ В меню", "menu:home");
 }
 
@@ -65,7 +68,19 @@ function listKeyboard(leads) {
   return keyboard.text("⬅️ В меню", "menu:home");
 }
 
-export function createBot(config, store) {
+const QUOTE_QUESTIONS = [
+  ["units", "Количество отгружаемых единиц в месяц"],
+  ["markedUnits", "Количество единиц для сканирования ЧЗ (0, если не требуется)"],
+  ["pallets", "Количество входящих паллет в месяц"],
+  ["boxes", "Количество входящих коробов в месяц"],
+  ["storagePallets", "Среднее количество паллетомест хранения"],
+  ["storageDays", "Среднее количество дней хранения"],
+  ["returnUnits", "Количество возвратов в месяц"],
+  ["returnTrips", "Количество рейсов для забора возвратов"],
+  ["cabinets", "Количество кабинетов для единого стока"],
+];
+
+export function createBot(config, store, drive) {
   const bot = new Bot(config.telegramToken);
   const sessions = new Map();
   const key = (ctx) => String(ctx.from.id);
@@ -125,6 +140,67 @@ export function createBot(config, store) {
     session.index += 1;
     if (session.index >= NEW_FIELDS.length) await finishNewLead(ctx);
     else await askNewField(ctx);
+  }
+
+  async function askQuoteNumber(ctx) {
+    const session = sessions.get(key(ctx));
+    const [field, question] = QUOTE_QUESTIONS[session.index];
+    const current = field === "units" ? session.defaultUnits : "";
+    const keyboard = new InlineKeyboard();
+    if (current) keyboard.text(`Использовать ${current}`, "quote:default").row();
+    keyboard.text("❌ Отмена", "flow:cancel");
+    await ctx.reply(`<b>${escapeHtml(question)}</b>\nВведите целое число${field === "units" ? " больше нуля" : " (можно 0)"}.`, {
+      parse_mode: "HTML", reply_markup: keyboard,
+    });
+  }
+
+  async function finishQuote(ctx) {
+    const session = sessions.get(key(ctx));
+    try {
+      const calculation = calculateQuote(session.data);
+      const now = new Date();
+      const quoteNumber = `КП-${now.toISOString().slice(0, 10).replaceAll("-", "")}-${session.id.slice(-6)}`;
+      const buffer = await buildQuoteWorkbook(config, session.lead, session.data, calculation, quoteNumber);
+      const filename = quoteFilename(quoteNumber, session.lead);
+      const driveUrl = await drive.upload(buffer, filename);
+      const updated = await store.update(session.id, {
+        "Номер КП": quoteNumber,
+        "Дата КП": formatDate(now, config.timeZone, true),
+        "Ссылка на КП": driveUrl,
+        "Сумма без НДС": calculation.totalWithoutVat,
+        "Сумма с НДС": calculation.totalWithVat,
+        "Статус КП": "Сформировано",
+        "Дата изменения": formatDate(now, config.timeZone, true),
+      });
+      sessions.delete(key(ctx));
+      await ctx.replyWithDocument(new InputFile(buffer, filename), {
+        caption: [
+          `✅ КП ${quoteNumber} сформировано`,
+          `Без НДС: ${calculation.totalWithoutVat.toLocaleString("ru-RU")} ₽`,
+          `С НДС 22%: ${calculation.totalWithVat.toLocaleString("ru-RU")} ₽`,
+          `Файл привязан к лиду ${updated["ID лида"]}`,
+          driveUrl,
+        ].join("\n"),
+      });
+      await ctx.reply(leadCard(updated), { parse_mode: "HTML", reply_markup: cardKeyboard(updated["ID лида"]) });
+    } catch (error) {
+      sessions.delete(key(ctx));
+      await ctx.reply(`Не удалось сформировать КП: ${escapeHtml(error.message)}`, { parse_mode: "HTML", reply_markup: menu });
+    }
+  }
+
+  async function acceptQuoteNumber(ctx, text) {
+    const session = sessions.get(key(ctx));
+    const [field] = QUOTE_QUESTIONS[session.index];
+    const value = Number(String(text).replaceAll(" ", ""));
+    if (!Number.isInteger(value) || value < 0 || (field === "units" && value < 1)) {
+      await ctx.reply("Введите целое неотрицательное число.");
+      return;
+    }
+    session.data[field] = value;
+    session.index += 1;
+    if (session.index >= QUOTE_QUESTIONS.length) await finishQuote(ctx);
+    else await askQuoteNumber(ctx);
   }
 
   bot.command("start", async (ctx) => showMenu(ctx, `Здравствуйте, ${escapeHtml(managerName(ctx.from))}!`));
@@ -244,6 +320,61 @@ export function createBot(config, store) {
     await ctx.reply("Выберите новый статус:", { reply_markup: keyboard });
   });
 
+  bot.callbackQuery(/^lead:quote:(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const id = ctx.match[1];
+    const found = await store.findById(id);
+    if (!found || !visible(ctx, found.lead)) return ctx.reply("Лид не найден или у вас нет доступа.");
+    sessions.set(key(ctx), {
+      type: "quote-type", id, lead: found.lead, index: 0, data: {},
+      defaultUnits: String(found.lead["Единиц в месяц"] || "").replace(/\D/g, ""),
+    });
+    await ctx.reply("Выберите тип товара для расчёта КП:", {
+      reply_markup: new InlineKeyboard()
+        .text("📦 Стандартный товар до 7 л", "quote:type:standard").row()
+        .text("🛋 КГТ", "quote:type:kgt").row()
+        .text("❌ Отмена", "flow:cancel"),
+    });
+  });
+
+  bot.callbackQuery("quote:type:standard", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const session = sessions.get(key(ctx));
+    if (!session?.type.startsWith("quote")) return;
+    session.type = "quote";
+    session.data.productType = "standard";
+    await askQuoteNumber(ctx);
+  });
+
+  bot.callbackQuery("quote:type:kgt", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const session = sessions.get(key(ctx));
+    if (!session?.type.startsWith("quote")) return;
+    session.type = "quote-kgt";
+    const keyboard = new InlineKeyboard();
+    Object.entries(KGT_RATES).forEach(([id, item]) => keyboard.text(`${item.label} — ${item.processing} ₽`, `quote:kgt:${id}`).row());
+    keyboard.text("❌ Отмена", "flow:cancel");
+    await ctx.reply("Выберите категорию КГТ:", { reply_markup: keyboard });
+  });
+
+  bot.callbackQuery(/^quote:kgt:(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const session = sessions.get(key(ctx));
+    const kgtType = ctx.match[1];
+    if (!session || !KGT_RATES[kgtType]) return;
+    session.type = "quote";
+    session.data.productType = "kgt";
+    session.data.kgtType = kgtType;
+    await askQuoteNumber(ctx);
+  });
+
+  bot.callbackQuery("quote:default", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const session = sessions.get(key(ctx));
+    if (!session || session.type !== "quote" || !session.defaultUnits || session.index !== 0) return;
+    await acceptQuoteNumber(ctx, session.defaultUnits);
+  });
+
   bot.callbackQuery(/^status:(\d+):(.+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const [, statusIndex, id] = ctx.match;
@@ -274,6 +405,7 @@ export function createBot(config, store) {
       if (!matches.length) return showMenu(ctx, "Ничего не найдено.");
       return ctx.reply(`Найдено: ${matches.length}`, { reply_markup: listKeyboard(matches) });
     }
+    if (session.type === "quote") return acceptQuoteNumber(ctx, ctx.message.text);
   });
 
   bot.catch(({ error }) => console.error("Ошибка Telegram-бота:", error));
