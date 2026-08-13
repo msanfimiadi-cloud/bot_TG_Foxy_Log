@@ -32,5 +32,8 @@ export function loadConfig() {
     allowedIds,
     adminIds: idSet("ADMIN_TELEGRAM_IDS"),
     timeZone: process.env.TIMEZONE?.trim() || "Europe/Moscow",
+    driveFolderId: process.env.GOOGLE_DRIVE_FOLDER_ID?.trim() || "",
+    driveShareWithLink: (process.env.DRIVE_SHARE_WITH_LINK?.trim() || "true") === "true",
+    quoteTemplateFile: process.env.QUOTE_TEMPLATE_FILE?.trim() || "./templates/КП_Фокси_Логистика_шаблон.xlsx",
   };
 }
