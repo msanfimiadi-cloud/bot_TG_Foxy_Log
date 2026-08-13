@@ -1,0 +1,20 @@
+{
+  "name": "bot-tg-foxy-log",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Telegram-бот для регистрации и ведения лидов в Google Таблице",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test",
+    "check": "node --check src/index.js && node --check src/bot.js && node --check src/sheets.js"
+  },
+  "dependencies": {
+    "dotenv": "17.4.2",
+    "googleapis": "174.0.1",
+    "grammy": "1.45.1"
+  }
+}
