@@ -55,7 +55,14 @@ Telegram-бот для регистрации и ведения лидов в Go
 
 Все ставки указаны без НДС. Сумма с НДС рассчитывается по ставке 22%. Объём свыше 7 000 единиц требует индивидуального расчёта.
 
-Для загрузки КП создайте папку на Google Drive, откройте её сервисному аккаунту с правом редактора и укажите ID папки в `GOOGLE_DRIVE_FOLDER_ID`.
+Для загрузки КП в обычную папку «Мой диск» используется OAuth владельца Google Drive:
+
+1. Создайте OAuth-клиент в том же проекте Google Cloud.
+2. Получите refresh token со scope `https://www.googleapis.com/auth/drive.file`.
+3. Укажите `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` и `GOOGLE_OAUTH_REFRESH_TOKEN`.
+4. Укажите ID папки владельца в `GOOGLE_DRIVE_FOLDER_ID`.
+
+Сервисный аккаунт продолжает работать только с Google Таблицей. Если OAuth-переменные не заданы, бот сохраняет прежний режим Drive через сервисный аккаунт, который подходит для общих дисков Google Workspace.
 
 ## Telegram ID сотрудников
 
@@ -96,6 +103,9 @@ docker compose logs -f leads-bot
 | `TIMEZONE` | Часовой пояс дат, по умолчанию `Europe/Moscow` |
 | `GOOGLE_DRIVE_FOLDER_ID` | ID папки для сохранения сформированных КП |
 | `DRIVE_SHARE_WITH_LINK` | Создавать ссылку для просмотра файла |
+| `GOOGLE_OAUTH_CLIENT_ID` | Client ID OAuth-клиента владельца Google Drive |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | Client secret OAuth-клиента владельца Google Drive |
+| `GOOGLE_OAUTH_REFRESH_TOKEN` | Refresh token для фоновой загрузки КП |
 | `QUOTE_TEMPLATE_FILE` | Путь к Excel-шаблону КП |
 
 ## Безопасность
