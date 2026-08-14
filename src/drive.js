@@ -2,8 +2,16 @@ import { Readable } from "node:stream";
 import { google } from "googleapis";
 
 export class QuoteDriveStore {
-  constructor(config, auth) {
+  constructor(config, serviceAccountAuth) {
     this.config = config;
+    let auth = serviceAccountAuth;
+    if (config.driveOAuthClientId) {
+      auth = new google.auth.OAuth2(
+        config.driveOAuthClientId,
+        config.driveOAuthClientSecret,
+      );
+      auth.setCredentials({ refresh_token: config.driveOAuthRefreshToken });
+    }
     this.drive = google.drive({ version: "v3", auth });
   }
 
